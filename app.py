@@ -49,6 +49,12 @@ DEFAULTS = {
 
 st.set_page_config(page_title="Sn barcode finder", layout="wide")
 
+MIN_STREAMLIT = (1, 40)
+if tuple(int(part) for part in st.__version__.split(".")[:2]) < MIN_STREAMLIT:
+    st.error(f"This app needs Streamlit 1.40 or newer, but this computer has {st.__version__}. "
+             "Run `pip install --upgrade streamlit` in Terminal, then start the app again.")
+    st.stop()
+
 
 # ------------------------------------------------------------------ state
 
@@ -90,17 +96,6 @@ def unit_changed() -> None:
 @st.cache_data(show_spinner="Reading file…")
 def load_file(data: bytes, name: str) -> loader.Dataset:
     return loader.load(data, name)
-
-
-@st.cache_resource(show_spinner="Checking image export…")
-def image_export_available() -> bool:
-    import plotly.graph_objects as go
-
-    try:
-        plots.to_image(go.Figure(), "svg")
-        return True
-    except Exception:
-        return False
 
 
 def pick_peaks(ds: loader.Dataset, preferred: str) -> tuple[str, pd.DataFrame]:
@@ -278,7 +273,7 @@ def results_table(hits: pd.DataFrame) -> pd.DataFrame:
     st.caption("Select a row to zoom on that hit. Strong rows are orange, Possible rows are blue; "
                "the Class column says the same in words.")
     event = st.dataframe(styled, hide_index=True, on_select="rerun", selection_mode="single-row",
-                         key="hit_table", height=min(38 + 35 * len(shown), 420), placeholder="–")
+                         key="hit_table", height=min(38 + 35 * len(shown), 420))
     selected = event.selection.rows if event and event.selection else []
     return shown.iloc[selected]
 
@@ -286,15 +281,25 @@ def results_table(hits: pd.DataFrame) -> pd.DataFrame:
 def download_figure(fig, title: str, key: str) -> None:
     stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in title)[:80]
     cols = st.columns(3)
-    if image_export_available():
-        cols[0].download_button("PNG (300 dpi)", lambda: plots.to_image(fig, "png"), f"{stem}.png",
-                                "image/png", key=f"png_{key}", on_click="ignore")
-        cols[1].download_button("SVG", lambda: plots.to_image(fig, "svg"), f"{stem}.svg", "image/svg+xml",
-                                key=f"svg_{key}", on_click="ignore")
-    else:
-        cols[0].caption("PNG/SVG export needs Chrome installed. Use the camera icon on the plot instead.")
-    cols[2].download_button("Plotted points (CSV)", lambda: export.points_csv(plots.plotted_points(fig), title),
-                            f"{stem}.csv", "text/csv", key=f"csv_{key}", on_click="ignore")
+    # Images take a second or two to render, so they are only made when asked for.
+    signature = hash(fig.to_json())
+    images = st.session_state.get(f"img_{key}")
+    if images and images["signature"] == signature:
+        cols[0].download_button("Download PNG (300 dpi)", images["png"], f"{stem}.png", "image/png",
+                                key=f"png_{key}")
+        cols[1].download_button("Download SVG", images["svg"], f"{stem}.svg", "image/svg+xml", key=f"svg_{key}")
+    elif cols[0].button("Prepare PNG and SVG", key=f"make_{key}"):
+        try:
+            with st.spinner("Rendering images…"):
+                st.session_state[f"img_{key}"] = {
+                    "signature": signature, "png": plots.to_image(fig, "png"), "svg": plots.to_image(fig, "svg"),
+                }
+            st.rerun()
+        except Exception:
+            cols[1].warning("PNG/SVG export needs Google Chrome installed (or run `plotly_get_chrome` once). "
+                            "The camera icon on the plot saves a PNG without it.")
+    cols[2].download_button("Plotted points (CSV)", export.points_csv(plots.plotted_points(fig), title),
+                            f"{stem}.csv", "text/csv", key=f"csv_{key}")
 
 
 def axis_limits(for_zoom: bool):
@@ -418,7 +423,7 @@ def main() -> None:
         st.download_button(
             "Download hit table (CSV)",
             export.hits_csv(hits, settings, file_names, st.session_state["search_dataset"], isotopes),
-            "sn_barcode_hits.csv", "text/csv", on_click="ignore",
+            "sn_barcode_hits.csv", "text/csv",
         )
         if not selected.empty:
             hit = selected.iloc[0]

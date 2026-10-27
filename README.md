@@ -12,7 +12,8 @@ highlights it in a table and on the plots.
 
 ## Run it
 
-You need Python 3.10 or newer.
+You need Python 3.10 or newer and Streamlit 1.40 or newer (an older Streamlit,
+for example from Anaconda, shows a message asking you to upgrade).
 
 ```bash
 pip install -r requirements.txt
